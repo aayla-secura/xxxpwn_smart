@@ -13,6 +13,8 @@ Differences from xxxpwn:
   * Reverse match (match indicates fail)
   * Disable prediscovery of string length of values (gets a character until it detects the end of the string instead)
   * Match node/attribute names only for previously seen ones at the current node level
+	* A preferred character set (try first, before the rest)
+	* Guess if node is numeric based on a regex; use a different preferred character set for those
 
 FAQ:
   * *Why `_smart`?* 'Cause everything nowadays is either smart or quantum, and quantum doesn't make sense here.
