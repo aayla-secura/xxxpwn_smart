@@ -46,7 +46,7 @@ import trie
 VERSION = "1.0.0_alpha"
 ROOT_NODE = '/*[1]'  # Root node of a XML document
 BAD_CHAR = '?'       # Placeholder for a character not in character set
-NUM_FREQ_BANDS = 3
+COMMON_PUNCT = ' .,?!-()'
 QI = Queue.Queue()   # Input Queue
 QO = Queue.Queue()   # Output Queue
 node_names = []      # Used for optimization of previous nodes
@@ -91,36 +91,35 @@ def get_chars_by_likelihood(so_far, chars):
 	'''Group the given charset by likelihood of each character given value
 	   so_far'''
 	global trie_root
-
-	print_dbg('Getting prediction for "%s"' % so_far)
-	if trie_root is None:
-		#return {0: chars}
-		return [chars]
+	global args
+	num_bands_pred = 3 # for predicted characters only
+	num_bands = num_bands_pred + 2 # two bands for rest of characters
 
 	pred_chars = dict.fromkeys(chars, 0)
-	# User input could be a phrase
-	pred_chars = trie.predict(trie_root, so_far, result=pred_chars,
-			strip_so_far=True, add_freqs=True, no_new=True, max_new_chars=1)
-	if ' ' in so_far:
-		# Add predictions for the last word as well
-		pred_chars = trie.predict(trie_root,
-				re.split('(?:[^\w]|_)+', so_far)[-1], result=pred_chars,
+	if trie_root is not None:
+		print_dbg('Getting prediction for "%s"' % so_far)
+		# User input could be a phrase
+		pred_chars = trie.predict(trie_root, so_far, result=pred_chars,
 				strip_so_far=True, add_freqs=True, no_new=True, max_new_chars=1)
+		words = re.split('(?:[^\w]|_)+', so_far)
+		if len(words) > 1:
+			# Add predictions for the last word as well
+			pred_chars = trie.predict(trie_root, words[-1], result=pred_chars,
+					strip_so_far=True, add_freqs=True, no_new=True, max_new_chars=1)
 
-	preferred = filter(lambda el: el > 0, pred_chars.values())
-	if not preferred:
-		# No candidates
-		#return {0: chars}
-		return [chars]
-
-	# Group charactes in bands of likelihood
+	# Group charactes in bands of frequency
 	max_freq = max(pred_chars.values())
-	min_freq = min(preferred)
-	step = (max_freq - min_freq)/NUM_FREQ_BANDS + 1
-	get_band = lambda el: (el - min_freq) / step if el > 0 else 0
-	freq_groups = dict.fromkeys(range(NUM_FREQ_BANDS+1), '')
+	min_freq = min(filter(lambda el: el > 0, pred_chars.values()) or [0])
+	step = (max_freq - min_freq)/num_bands_pred + 1
+	# Predicted set goes into bands 3 to num_bands
+	# Rest of characters go into band 1 (common) or 0 (rest)
+	get_band = lambda freq, char: \
+			( (freq - min_freq)/step + num_bands_rest) \
+		if freq > 0 else \
+			( (char in args.common_chars)*1 )
+	freq_groups = dict.fromkeys(range(num_bands), '')
 	for char, freq in pred_chars.items():
-		freq_groups[get_band(freq)] += char
+		freq_groups[get_band(freq,char)] += char
 
 	#return freq_groups
 	return [chars for freq, chars in sorted(freq_groups.items(),
@@ -903,6 +902,7 @@ if __name__ == "__main__":
 	group_adv.add_argument("--start_node", help="Start recovery at given node (default is root node /*[1])", dest="start_node", default=ROOT_NODE, metavar='NODE')
 	#group_adv.add_argument("-k", "--keep_alive", help="Use HTTP Keep Alives connections to speedup round-trip time", dest="keep_alive", action="store_true", default=False)
 	group_adv.add_argument("-u", "--use_characters", help="Use given string for BST character discovery (default is printable characters)", dest="character_set", default=string.printable, metavar='CHARSET')
+	group_adv.add_argument("--common_characters", help="After exhausting characters from dictionary prediction (if enabled), try the given set of characters before all the rest (default is lowercase + '%s' characters). Use '' to disable" % COMMON_PUNCT, dest="common_chars", default=string.lowercase + COMMON_PUNCT, metavar='CHARSET')
 	group_adv.add_argument("--unicode", help="Include Unicode characters to search space", dest="unicode", action="store_true", default=False)
 	#group_adv.add_argument("-t", "--threads", help="Parallelize attack using N threads (default is 1)", dest="threads", type=nonneg_int, default=0, metavar='N')
 	group_adv.add_argument("--xpath2", help="Check for presence of XPath 2.0 functions", dest="xpath2", action="store_true", default=False)
