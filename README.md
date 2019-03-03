@@ -1,6 +1,12 @@
-A fork of xxxpwn (`https://github.com/feakk/xxxpwn`) adding further optimizations and tweaks. Uses predictive text based on a dictionary of words/phrases vs frequencies of occurence (incorporated from `https://github.com/nyghtowl/Predictive_Txt_Ex`).
+# What's this?
 
-Differences from xxxpwn:
+A fork of [xxxpwn](https://github.com/feakk/xxxpwn) adding further
+optimizations and tweaks. Uses predictive text based on a dictionary of
+words/phrases vs frequencies of occurence (incorporated from
+[Predictive_Txt_Ex](https://github.com/nyghtowl/Predictive_Txt_Ex)).
+
+## Differences from xxxpwn:
+
   * Predictive text
   * Multithreading not working yet (TO DO)
   * Detect if HTTP, only change headers if HTTP (and if double newline
@@ -16,5 +22,6 @@ Differences from xxxpwn:
 	* A preferred character set (try first, before the rest)
 	* Guess if node is numeric based on a regex; use a different preferred character set for those
 
-FAQ:
-  * *Why `_smart`?* 'Cause everything nowadays is either smart or quantum, and quantum doesn't make sense here.
+# FAQ:
+
+  * **Why "_smart"?** 'Cause everything nowadays is either smart or quantum, and quantum doesn't make sense here (not that it ever does make sense when used in commercial stuff).
