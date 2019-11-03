@@ -2,7 +2,7 @@
 
 A fork of [xxxpwn](https://github.com/feakk/xxxpwn) adding further
 optimizations and tweaks. Uses predictive text based on a dictionary of
-words/phrases vs frequencies of occurence (incorporated from
+words/phrases vs frequencies of occurrence (incorporated from
 [Predictive_Txt_Ex](https://github.com/nyghtowl/Predictive_Txt_Ex)).
 
 ## Differences from xxxpwn:
@@ -10,9 +10,9 @@ words/phrases vs frequencies of occurence (incorporated from
   * Predictive text
   * Multithreading not working yet (TO DO)
   * Detect if HTTP, only change headers if HTTP (and if double newline
-  * is present, do not match header names in body)
+    is present, do not match header names in body)
   * Limit the number of characters to get for a node/attribute name
-  * Limit the number of characters to get for a node/attribute contents
+  * Limit the number of characters to get for node/attribute content
   * Allow IP instead of hostname (Host header will not be updated)
   * Match on content length (min/max/exact) instead of string
   * Match string only in headers/body
@@ -22,6 +22,126 @@ words/phrases vs frequencies of occurence (incorporated from
 	* A preferred character set (try first, before the rest)
 	* Guess if node is numeric based on a regex; use a different preferred character set for those
 
-# FAQ:
+## FAQ:
 
-  * **Why "_smart"?** 'Cause everything nowadays is either smart or quantum, and quantum doesn't make sense here (not that it ever does make sense when used in commercial stuff).
+  * **Why "\_smart"?** 'Cause everything nowadays is either smart or quantum, and quantum doesn't make sense here (not that it ever does make sense when used in commercial stuff).
+
+## Command help
+
+```
+$ python2 xxxpwn_smart.py -h
+usage: xxxpwn_smart [-h] [-V] [--debug] [-r] [-U] [-H] [-s] [-p PORT]
+                    [-e PAYLOAD] [--summary] [--max_name_length N]
+                    [--max_content_length N] [--no_root] [--no_comments]
+                    [--no_processor] [--no_attributes] [--no_values]
+                    [--no_text] [--no_child]
+                    [-d FILE | -D FILE | --numeric_nodes REGEX]
+                    [--trie_delim CHARACTER] [-o] [-u CHARSET]
+                    [--common_characters CHARSET]
+                    [--numeric_characters CHARSET] [--unicode] [-l] [-g] [-n]
+                    [-L] [-x] [--len_low N] [--len_high N] [--start_node NODE]
+                    [--xpath2] [--search STRING] [--search_start]
+                    {regex,length} ... HOST FILE
+
+Read a remote XML file through an XPath injection vulnerability using
+optimized predictive text search
+
+positional arguments:
+  HOST                  Hostname or IP to connect to
+  FILE                  File containing sample request with $INJECT as dynamic
+                        injection location
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -V, --version         Print version and exit
+  --debug               Print debugging messages (default: False)
+  -r, --reverse-match   Make a positive match indicate a failed injection
+                        (default: False)
+  -U, --urlencode       URL encode key characters in payload (default: False)
+  -H, --htmlencode      HTML Encode key characters in payload (default: False)
+  -s, --ssl             Use SSL for connection (default: False)
+  -p PORT, --port PORT  Port number (default: 80 or 443 if using SSL)
+                        (default: None)
+
+Match type:
+  {regex,length}
+    regex               Determine successful injection based on presence of
+                        regular expression in reply
+    length              Determine successful injection based on content length
+
+Retrieval options:
+  -e PAYLOAD, --example PAYLOAD
+                        Test injection with an example injection request
+                        (default: None)
+  --summary             Print XML summary information only (default: False)
+  --max_name_length N   Retrieve only up to N characters for every
+                        node/attribute name (default: None)
+  --max_content_length N
+                        Retrieve only up to N characters for every
+                        node/attribute content (default: None)
+  --no_root             Disable accessing comments/instructions in root
+                        (default: False)
+  --no_comments         Disable accessing comments/instructions in retrieval
+                        (default: False)
+  --no_processor        Disable accessing comments nodes (default: False)
+  --no_attributes       Disable accessing attributes (default: False)
+  --no_values           Disable accessing attribute values (default: False)
+  --no_text             Disable accessing text nodes (default: False)
+  --no_child            Disable accessing child nodes (default: False)
+
+Advanced options for character prediction:
+  -d FILE, --dictionary FILE
+                        A delimited file containing words (column 1) and
+                        frequencies (column 2). (default: None)
+  -D FILE, --bin_dictionary FILE
+                        The .pickle file generated by us using a previous
+                        delimited ASCII dictionary (default: None)
+  --numeric_nodes REGEX
+                        Node/attribute names matching the given regular
+                        expression prioritize --numeric_characters (default: (
+                        _|\b)id(_|\b)|(_|\b)number(_|\b)|(_|\b)mobile(_|\b)|ph
+                        one(_|\b)|(_|\b)fax(_|\b)|(_|\b)price(_|\b))
+  --trie_delim CHARACTER
+                        Delimiter for trie dictionary file (default: )
+  -o, --optimize_charset
+                        Optimize character set globally and for any string
+                        length over 30 (default: False)
+  -u CHARSET, --use_characters CHARSET
+                        Use given string for BST character discovery (default:
+                        0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR
+                        STUVWXYZ!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~ )
+  --common_characters CHARSET
+                        [For general nodes] After exhausting characters from
+                        dictionary prediction (if enabled), try the given set
+                        of characters before all the rest'). Use '' to disable
+                        (default: abcdefghijklmnopqrstuvwxyz .,?!-())
+  --numeric_characters CHARSET
+                        [For numeric nodes] After exhausting characters from
+                        dictionary prediction (if enabled), try the given set
+                        of characters before all the rest. Use '' to disable
+                        (default: 0123456789 -.,$)
+  --unicode             Include Unicode characters to search space (default:
+                        False)
+
+Other advanced options:
+  -l, --lowercase       Optimize further by reducing injection to lowercase
+                        matches (default: False)
+  -g, --global_count    Maintain global count of nodes (default: False)
+  -n, --normalize_space
+                        Normalize whitespace (default: False)
+  -L, --use_strlen      Don't find out the length of a value before querying
+                        it character by character. This may work better if
+                        using prediction. (default: True)
+  -x, --xml_match       Match current nodes to previously recovered data
+                        (default: False)
+  --len_low N           Start guessing string lengths are at least N
+                        characters (default: 0)
+  --len_high N          Start guessing string lengths are at most N characters
+                        (default: 16)
+  --start_node NODE     Start recovery at given node (default: /*[1])
+  --xpath2              Check for presence of XPath 2.0 functions (default:
+                        False)
+  --search STRING       Print all string matches (use -l for case-insensitive)
+                        (default: None)
+  --search_start        Search only at start of node (default: False)
+  ```
